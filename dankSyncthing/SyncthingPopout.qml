@@ -35,7 +35,7 @@ PopoutComponent {
     // easily exceed a sensible popout height. Below that cap the popout simply
     // shrinks to fit, because PluginPopout sizes the window from this root's
     // implicitHeight.
-    readonly property real maxBodyHeight: 460
+    readonly property real maxBodyHeight: 520
 
     DankFlickable {
         id: bodyScroll

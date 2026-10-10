@@ -16,27 +16,13 @@ PluginComponent {
     readonly property var st: SyncthingService.syncState
     readonly property var look: Status.presentation(st.kind)
 
-    // Theme colour token name -> actual colour. Every token here was checked
-    // against Common/Theme.qml; THEME_REFERENCE.md also lists some that do not
-    // exist (errorText, onError, popupBackground, cornerRadiusSmall).
-    function tone(token) {
-        switch (token) {
-        case "success":
-            return Theme.success;
-        case "primary":
-            return Theme.primary;
-        case "warning":
-            return Theme.warning;
-        case "error":
-            return Theme.error;
-        case "onSurfaceVariant":
-            return Theme.onSurfaceVariant;
-        default:
-            return Theme.surfaceText;
-        }
-    }
+    // Status colours are derived in Palette.js rather than switched on inline,
+    // because two of the tokens need correcting before use: a theme may leave
+    // warning/error/success undefined, and the Material fallbacks then collide
+    // with some themes' primary. See Palette.js for the detail.
+    readonly property SyncthingPalette pal: SyncthingPalette {}
 
-    readonly property color statusColor: tone(look.color)
+    readonly property color statusColor: root.pal.tone(root.look.color)
     readonly property bool quiet: cfg.hideWhenUpToDate && st.kind === "uptodate"
 
     // ---------------------------------------------------------------------
@@ -45,40 +31,67 @@ PluginComponent {
     // BasePill sizes the pill from the content root's implicitWidth/Height, so
     // a Row/Column root is what we want — and it already draws the background,
     // outline, hover tint and ripple, so we must not add our own.
-    component PillIcon: DankIcon {
-        id: pillIcon
+    //
+    // Hiding is driven through setVisibilityOverride rather than `visible` on
+    // the content: an invisible Row still reports an implicitWidth, so the old
+    // approach left an empty but still hoverable pill sitting in the bar.
+    // PluginComponent's override animates the pill width to zero.
+    onQuietChanged: root._applyQuiet()
+    Component.onCompleted: root._applyQuiet()
 
-        // DankIcon has no `font` property; the glyph size is set with `size`.
+    function _applyQuiet() {
+        if (quiet)
+            setVisibilityOverride(false);
+        else
+            clearVisibilityOverride();
+    }
+
+    component PillIcon: DankIcon {
         name: root.look.icon
         size: root.iconSize
         color: root.statusColor
+    }
 
-        RotationAnimator {
-            target: pillIcon
-            from: 0
-            to: 360
-            duration: 1600
-            loops: Animation.Infinite
-            running: root.st.kind === "syncing"
-            // Leave the glyph upright once it stops spinning.
-            onRunningChanged: if (!running)
-                pillIcon.rotation = 0
-        }
+    component PillSpinner: DankSpinner {
+        size: root.iconSize
+        color: root.statusColor
+        running: visible
     }
 
     component PillText: StyledText {
         text: Status.pillText(root.st, root.cfg)
         visible: text.length > 0
-        color: root.st.kind === "error" ? Theme.error : (Theme.widgetTextColor || Theme.surfaceText)
+        // Theme.widgetTextColor honours the user's bar "colorful" setting; the
+        // error case overrides it because an unreadable-but-colourful pill is
+        // not a trade worth making. pal.text guarantees the contrast.
+        color: root.st.kind === "error" ? root.pal.text(root.pal.danger) : (Theme.widgetTextColor || Theme.surfaceText)
         font.pixelSize: Theme.barTextSize(root.barThickness, root.barConfig?.fontScale)
+    }
+
+    // DMS's own M3 spinner, used in place of rotating the glyph: DankIcon needs
+    // smoothTransform to rotate without NativeRendering artefacts, and even
+    // then a spinning cloud does not match how the rest of the shell indicates
+    // progress.
+    component PillGlyph: Item {
+        implicitWidth: root.iconSize
+        implicitHeight: root.iconSize
+
+        PillSpinner {
+            anchors.centerIn: parent
+            visible: root.st.kind === "syncing"
+        }
+
+        PillIcon {
+            anchors.centerIn: parent
+            visible: root.st.kind !== "syncing"
+        }
     }
 
     horizontalBarPill: Component {
         Row {
             spacing: Theme.spacingXS
-            visible: !root.quiet
 
-            PillIcon {
+            PillGlyph {
                 anchors.verticalCenter: parent.verticalCenter
             }
 
@@ -91,9 +104,8 @@ PluginComponent {
     verticalBarPill: Component {
         Column {
             spacing: Theme.spacingXS
-            visible: !root.quiet
 
-            PillIcon {
+            PillGlyph {
                 anchors.horizontalCenter: parent.horizontalCenter
             }
 
@@ -140,8 +152,15 @@ PluginComponent {
         Rectangle {
             implicitHeight: ccBody.implicitHeight + Theme.spacingM * 2
             radius: Theme.cornerRadius
-            color: Theme.surfaceContainerHigh
-            border.width: 0
+            // The popout surface is already withAlpha(surfaceContainer,
+            // popupTransparency), so an opaque surfaceContainerHigh card both
+            // sat invisibly close to it and ignored the user's blur and
+            // transparency settings. nestedSurface is the transparency-aware
+            // token DMS uses for exactly this, e.g. in
+            // Modules/ControlCenter/Details/DiskUsageDetail.qml.
+            color: Theme.nestedSurface
+            border.color: Theme.outlineMedium
+            border.width: Theme.layerOutlineWidth
 
             SyncthingDetails {
                 id: ccBody

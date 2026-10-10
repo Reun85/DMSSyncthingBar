@@ -7,6 +7,13 @@ import "Status.js" as Status
 // The body of the detail view: verdict, errors, devices, folders, actions.
 // Shared by the bar popout and the Control Center detail panel so the two can
 // never drift apart. `compact` trims it for the smaller Control Center panel.
+//
+// Colour rule for this file, and the reason the panel was unreadable before:
+// a severity colour goes on an icon, a meter or a border. Label text stays at
+// Theme.surfaceText / Theme.surfaceVariantText. Where a value must read as an
+// error, it goes through `pal.text()`, which guarantees contrast against the
+// surface on every theme. Nothing here sets a background without also setting
+// its foreground.
 Column {
     id: root
 
@@ -23,26 +30,11 @@ Column {
     readonly property var look: Status.presentation(st.kind)
     readonly property bool hasServer: SyncthingService.hasServer
 
+    readonly property SyncthingPalette pal: SyncthingPalette {}
+
     spacing: Theme.spacingM
 
-    function tone(token) {
-        switch (token) {
-        case "success":
-            return Theme.success;
-        case "primary":
-            return Theme.primary;
-        case "warning":
-            return Theme.warning;
-        case "error":
-            return Theme.error;
-        case "onSurfaceVariant":
-            return Theme.onSurfaceVariant;
-        default:
-            return Theme.surfaceText;
-        }
-    }
-
-    readonly property color statusColor: tone(look.color)
+    readonly property color statusColor: root.pal.tone(root.look.color)
     readonly property int totalErrors: {
         let n = st.errors.length;
         for (let i = 0; i < st.folders.length; i++)
@@ -50,16 +42,9 @@ Column {
         return n;
     }
 
-    // Reusable section heading.
-    component SectionLabel: StyledText {
-        font.pixelSize: Theme.fontSizeSmall
-        font.weight: Font.Bold
-        color: Theme.onSurfaceVariant
-    }
-
     component Divider: Rectangle {
-        height: 1
-        color: Qt.rgba(Theme.outline.r, Theme.outline.g, Theme.outline.b, 0.12)
+        height: Theme.layerOutlineWidth
+        color: Theme.outlineMedium
     }
 
     // ---------------------------------------------------------------- verdict
@@ -67,23 +52,44 @@ Column {
         width: parent.width
         spacing: Theme.spacingM
 
-        DankIcon {
-            name: root.look.icon
-            size: root.compact ? Theme.iconSize : Theme.iconSizeLarge
-            color: root.statusColor
+        // DankSpinner is DMS's own M3 progress indicator. The previous version
+        // rotated the status glyph with a RotationAnimator, which needs
+        // DankIcon.smoothTransform or it renders with NativeRendering artefacts
+        // — and still would not have looked like the rest of the shell.
+        Item {
+            width: root.compact ? Theme.iconSize : Theme.iconSizeLarge
+            height: width
             anchors.verticalCenter: parent.verticalCenter
+
+            DankSpinner {
+                anchors.fill: parent
+                visible: root.st.kind === "syncing"
+                running: visible
+                size: parent.width
+                color: root.statusColor
+            }
+
+            DankIcon {
+                anchors.centerIn: parent
+                visible: root.st.kind !== "syncing"
+                name: root.look.icon
+                size: parent.width
+                color: root.statusColor
+            }
         }
 
         Column {
-            width: parent.width - Theme.iconSizeLarge - Theme.spacingM
+            width: parent.width - (root.compact ? Theme.iconSize : Theme.iconSizeLarge) - Theme.spacingM
             spacing: 2
             anchors.verticalCenter: parent.verticalCenter
 
             StyledText {
+                width: parent.width
                 text: root.st.label
                 font.pixelSize: root.compact ? Theme.fontSizeMedium : Theme.fontSizeLarge
                 font.weight: Font.Bold
                 color: Theme.surfaceText
+                elide: Text.ElideRight
             }
 
             StyledText {
@@ -91,7 +97,7 @@ Column {
                 text: root.st.detail
                 visible: text.length > 0
                 font.pixelSize: Theme.fontSizeSmall
-                color: Theme.onSurfaceVariant
+                color: Theme.surfaceVariantText
                 wrapMode: Text.WordWrap
                 maximumLineCount: 2
                 elide: Text.ElideRight
@@ -101,25 +107,12 @@ Column {
 
     // ----------------------------------------------------------- not set up
     // The one state the user can only fix outside this panel.
-    Rectangle {
+    MessageCard {
         width: parent.width
         visible: root.st.kind === "unconfigured" || root.st.kind === "unreachable"
-        implicitHeight: hintText.implicitHeight + Theme.spacingM * 2
-        radius: Theme.cornerRadius
-        color: Qt.rgba(Theme.warning.r, Theme.warning.g, Theme.warning.b, 0.10)
-        border.width: 0
-
-        StyledText {
-            id: hintText
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.verticalCenter: parent.verticalCenter
-            anchors.margins: Theme.spacingM
-            text: root.st.kind === "unreachable" ? qsTr("Could not reach %1.\nIs the Syncthing service running?").arg(SyncthingService.localUrl) : (root.st.detail || qsTr("No Syncthing API key found. Set one in the plugin settings."))
-            font.pixelSize: Theme.fontSizeSmall
-            color: Theme.surfaceText
-            wrapMode: Text.WordWrap
-        }
+        tone: root.pal.warn
+        iconName: "help"
+        message: root.st.kind === "unreachable" ? qsTr("Could not reach %1.\nIs the Syncthing service running?").arg(SyncthingService.localUrl) : (root.st.detail || qsTr("No Syncthing API key found. Set one in the plugin settings."))
     }
 
     // ----------------------------------------------------------------- errors
@@ -128,35 +121,22 @@ Column {
         spacing: Theme.spacingXS
         visible: root.totalErrors > 0
 
-        SectionLabel {
-            text: qsTr("Errors (%1)").arg(root.totalErrors)
+        SectionHeader {
+            label: qsTr("Errors")
+            count: root.totalErrors
         }
 
         // System-wide errors first — these are usually the root cause.
         Repeater {
             model: root.st.errors
 
-            Rectangle {
+            MessageCard {
                 required property var modelData
                 width: root.width
-                implicitHeight: sysErrText.implicitHeight + Theme.spacingS * 2
-                radius: Theme.cornerRadius
-                color: Qt.rgba(Theme.error.r, Theme.error.g, Theme.error.b, 0.12)
-                border.width: 0
-
-                StyledText {
-                    id: sysErrText
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.verticalCenter: parent.verticalCenter
-                    anchors.margins: Theme.spacingS
-                    text: modelData.message
-                    font.pixelSize: Theme.fontSizeSmall
-                    color: Theme.surfaceText
-                    wrapMode: Text.WordWrap
-                    maximumLineCount: 3
-                    elide: Text.ElideRight
-                }
+                tone: root.pal.danger
+                iconName: "error"
+                message: modelData.message
+                maxLines: 3
             }
         }
 
@@ -164,15 +144,18 @@ Column {
         Repeater {
             model: root.st.folders.filter(f => f.errorCount > 0)
 
-            StyledText {
+            StatusCard {
                 required property var modelData
                 width: root.width
-                text: "• " + modelData.label + " — " + (modelData.error && modelData.error.length > 0 ? modelData.error : Status.plural(modelData.errorCount, qsTr("error")))
-                font.pixelSize: Theme.fontSizeSmall
-                color: Theme.error
-                wrapMode: Text.WordWrap
-                maximumLineCount: 2
-                elide: Text.ElideRight
+                iconName: "folder_off"
+                accent: root.pal.danger
+                title: modelData.label
+                subtitle: modelData.error && modelData.error.length > 0 ? modelData.error : Status.plural(modelData.errorCount, qsTr("error"))
+                trailingText: Status.plural(modelData.errorCount, qsTr("error"))
+                // The one place a value is tinted rather than neutral: an error
+                // count should read as an error. pal.text keeps it legible when
+                // the theme's error colour is a pale fallback.
+                trailingColor: root.pal.text(root.pal.danger)
             }
         }
 
@@ -195,60 +178,44 @@ Column {
         spacing: Theme.spacingXS
         visible: root.st.devices.length > 0
 
-        SectionLabel {
-            text: qsTr("Devices")
+        SectionHeader {
+            label: qsTr("Devices")
+            count: root.st.devices.length
         }
 
         Repeater {
             model: root.st.devices
 
-            Row {
+            StatusCard {
                 required property var modelData
-                width: root.width
-                spacing: Theme.spacingS
-
-                DankIcon {
-                    name: modelData.connected ? "cloud_done" : "cloud_off"
-                    size: Theme.iconSizeSmall
-                    color: modelData.connected ? Theme.success : Theme.warning
-                    anchors.verticalCenter: parent.verticalCenter
-                }
-
-                StyledText {
-                    text: modelData.name
-                    font.pixelSize: Theme.fontSizeSmall
-                    color: Theme.surfaceText
-                    anchors.verticalCenter: parent.verticalCenter
-                }
 
                 // Mark which peer is the remote instance the user configured,
                 // so the "Server UI" button has an obvious referent. Only shown
                 // when a remote is actually configured.
-                StyledText {
-                    text: qsTr("(%1)").arg(root.cfg.serverLabel)
-                    visible: root.hasServer && SyncthingService.serverHost.length > 0 && modelData.address.indexOf(SyncthingService.serverHost) === 0
-                    font.pixelSize: Theme.fontSizeSmall
-                    color: Theme.onSurfaceVariant
-                    anchors.verticalCenter: parent.verticalCenter
-                }
+                readonly property bool isRemote: root.hasServer && SyncthingService.serverHost.length > 0 && modelData.address.indexOf(SyncthingService.serverHost) === 0
 
-                Item {
-                    width: 1
-                    height: 1
+                width: root.width
+                compact: root.compact
+                iconName: modelData.connected ? "cloud_done" : "cloud_off"
+                accent: modelData.connected ? root.pal.ok : root.pal.warn
+                title: isRemote ? modelData.name + " (" + root.cfg.serverLabel + ")" : modelData.name
+                // Second line only when it carries information. "idle" under a
+                // folder already showing 100%, or an address under a device
+                // already showing "in sync", is ink spent saying nothing — and
+                // six of those were what pushed the body past the scroll cap.
+                subtitle: (modelData.connected && modelData.needBytes > 0) ? qsTr("%1 behind").arg(Status.formatBytes(modelData.needBytes)) : ""
+                trailingText: {
+                    if (!modelData.connected)
+                        return modelData.lastSeen ? qsTr("last seen %1").arg(Status.formatAge(modelData.lastSeen)) : qsTr("never seen");
+                    if (modelData.percent >= 0 && modelData.percent < 100)
+                        return Math.floor(modelData.percent) + "%";
+                    return qsTr("in sync");
                 }
-
-                StyledText {
-                    text: {
-                        if (!modelData.connected)
-                            return modelData.lastSeen ? qsTr("last seen %1").arg(Status.formatAge(modelData.lastSeen)) : qsTr("never seen");
-                        if (modelData.percent >= 0 && modelData.percent < 100)
-                            return Math.floor(modelData.percent) + "% synced";
-                        return qsTr("in sync");
-                    }
-                    font.pixelSize: Theme.fontSizeSmall
-                    color: modelData.connected ? Theme.onSurfaceVariant : Theme.warning
-                    anchors.verticalCenter: parent.verticalCenter
-                }
+                trailingColor: modelData.connected ? Theme.surfaceVariantText : root.pal.text(root.pal.warn)
+                // Only worth a meter when the peer is actually behind; a full
+                // bar on every in-sync device is noise.
+                showMeter: modelData.connected && modelData.percent >= 0 && modelData.percent < 100
+                meterValue: modelData.percent / 100
             }
         }
     }
@@ -261,11 +228,12 @@ Column {
     // ---------------------------------------------------------------- folders
     Column {
         width: parent.width
-        spacing: 2
+        spacing: Theme.spacingXS
         visible: root.st.folders.length > 0
 
-        SectionLabel {
-            text: qsTr("Folders")
+        SectionHeader {
+            label: qsTr("Folders")
+            count: root.st.folders.length
         }
 
         Repeater {
@@ -273,38 +241,25 @@ Column {
             // truncates still shows what is wrong.
             model: root.compact ? root.st.folders.slice(0, 4) : root.st.folders
 
-            Row {
+            StatusCard {
                 required property var modelData
+
                 width: root.width
-                spacing: Theme.spacingS
-
-                StyledText {
-                    text: modelData.label
-                    font.pixelSize: Theme.fontSizeSmall
-                    color: modelData.errorCount > 0 ? Theme.error : Theme.surfaceText
-                    elide: Text.ElideRight
-                    width: Math.max(60, root.width * 0.4)
-                    anchors.verticalCenter: parent.verticalCenter
+                compact: root.compact
+                iconName: modelData.paused ? "pause_circle" : (modelData.errorCount > 0 ? "folder_off" : "folder")
+                accent: {
+                    if (modelData.errorCount > 0)
+                        return root.pal.danger;
+                    if (modelData.paused)
+                        return root.pal.muted;
+                    return modelData.needBytes > 0 ? root.pal.busy : root.pal.ok;
                 }
-
-                StyledText {
-                    text: modelData.paused ? qsTr("paused") : modelData.state
-                    font.pixelSize: Theme.fontSizeSmall
-                    color: Theme.onSurfaceVariant
-                    anchors.verticalCenter: parent.verticalCenter
-                }
-
-                Item {
-                    width: 1
-                    height: 1
-                }
-
-                StyledText {
-                    text: modelData.needBytes > 0 ? Status.formatBytes(modelData.needBytes) + " behind" : Math.floor(modelData.percent) + "%"
-                    font.pixelSize: Theme.fontSizeSmall
-                    color: modelData.needBytes > 0 ? Theme.primary : Theme.onSurfaceVariant
-                    anchors.verticalCenter: parent.verticalCenter
-                }
+                title: modelData.label
+                subtitle: modelData.paused ? qsTr("paused") : (modelData.state === "idle" ? "" : modelData.state)
+                trailingText: modelData.needBytes > 0 ? qsTr("%1 behind").arg(Status.formatBytes(modelData.needBytes)) : Math.floor(modelData.percent) + "%"
+                trailingColor: modelData.errorCount > 0 ? root.pal.text(root.pal.danger) : Theme.surfaceVariantText
+                showMeter: !modelData.paused && modelData.percent < 100
+                meterValue: modelData.percent / 100
             }
         }
 
@@ -312,7 +267,7 @@ Column {
             text: qsTr("+%1 more").arg(root.st.folders.length - 4)
             visible: root.compact && root.st.folders.length > 4
             font.pixelSize: Theme.fontSizeSmall
-            color: Theme.onSurfaceVariant
+            color: Theme.surfaceVariantText
         }
     }
 
@@ -335,11 +290,22 @@ Column {
         }
 
         DankButton {
+            id: restartButton
+
             text: root.confirmingRestart ? qsTr("Confirm restart") : qsTr("Restart")
             iconName: root.confirmingRestart ? "warning" : "restart_alt"
             enabled: root.st.ok
             opacity: enabled ? 1.0 : 0.45
-            backgroundColor: root.confirmingRestart ? Qt.rgba(Theme.error.r, Theme.error.g, Theme.error.b, 0.22) : Theme.surfaceContainerHigh
+
+            // This pairing is the bug that made the panel unreadable. DankButton
+            // defaults textColor to Theme.buttonText, which is only ever
+            // correct against Theme.buttonBg — on stock Amber dark that is
+            // #000000, so overriding the background alone painted black text on
+            // #2e2921. Resting state therefore keeps DMS's own matched pair by
+            // not touching either property; the armed state sets both.
+            backgroundColor: root.confirmingRestart ? Theme.withAlpha(root.pal.danger, 0.22) : Theme.buttonBg
+            textColor: root.confirmingRestart ? root.pal.text(root.pal.danger) : Theme.buttonText
+
             onClicked: {
                 if (root.confirmingRestart) {
                     root.confirmingRestart = false;

@@ -17,30 +17,24 @@ DesktopPluginComponent {
     readonly property var st: SyncthingService.syncState
     readonly property var look: Status.presentation(st.kind)
 
-    function tone(token) {
-        switch (token) {
-        case "success":
-            return Theme.success;
-        case "primary":
-            return Theme.primary;
-        case "warning":
-            return Theme.warning;
-        case "error":
-            return Theme.error;
-        case "onSurfaceVariant":
-            return Theme.onSurfaceVariant;
-        default:
-            return Theme.surfaceText;
-        }
+    // The card composites over the wallpaper rather than over a panel, so the
+    // palette's contrast reference is the card fill, not surfaceContainer.
+    readonly property SyncthingPalette pal: SyncthingPalette {
+        surface: Theme.surfaceContainer
     }
 
-    readonly property color statusColor: tone(look.color)
+    readonly property color statusColor: root.pal.tone(root.look.color)
 
     Rectangle {
         anchors.fill: parent
         radius: Theme.cornerRadius
-        color: Theme.surfaceContainer
-        opacity: root.cfg.desktopOpacity / 100
+        // Alpha on the colour rather than `opacity` on the item: an opacity
+        // layer forces the whole subtree into an offscreen render target, and
+        // this is how DMS's own desktop widgets do it (see
+        // Modules/BuiltinDesktopPlugins/SystemMonitorWidget.qml).
+        color: Theme.withAlpha(Theme.surfaceContainer, root.cfg.desktopOpacity / 100)
+        border.color: Theme.outlineMedium
+        border.width: Theme.layerOutlineWidth
     }
 
     Column {
@@ -52,25 +46,32 @@ DesktopPluginComponent {
 
         // ------------------------------------------------------------ headline
         Row {
+            id: headline
+
             width: parent.width
             spacing: Theme.spacingS
 
-            DankIcon {
-                id: statusIcon
-                name: root.look.icon
-                size: Theme.iconSize
-                color: root.statusColor
+            Item {
+                id: statusGlyph
+
+                width: Theme.iconSize
+                height: Theme.iconSize
                 anchors.verticalCenter: parent.verticalCenter
 
-                RotationAnimator {
-                    target: statusIcon
-                    from: 0
-                    to: 360
-                    duration: 1600
-                    loops: Animation.Infinite
-                    running: root.st.kind === "syncing"
-                    onRunningChanged: if (!running)
-                        statusIcon.rotation = 0
+                DankSpinner {
+                    anchors.fill: parent
+                    visible: root.st.kind === "syncing"
+                    running: visible
+                    size: parent.width
+                    color: root.statusColor
+                }
+
+                DankIcon {
+                    anchors.centerIn: parent
+                    visible: root.st.kind !== "syncing"
+                    name: root.look.icon
+                    size: Theme.iconSize
+                    color: root.statusColor
                 }
             }
 
@@ -92,7 +93,7 @@ DesktopPluginComponent {
                     text: root.st.detail
                     visible: text.length > 0
                     font.pixelSize: Theme.fontSizeSmall
-                    color: Theme.onSurfaceVariant
+                    color: Theme.surfaceVariantText
                     elide: Text.ElideRight
                     width: parent.width
                 }
@@ -101,8 +102,8 @@ DesktopPluginComponent {
 
         Rectangle {
             width: parent.width
-            height: 1
-            color: Qt.rgba(Theme.outline.r, Theme.outline.g, Theme.outline.b, 0.12)
+            height: Theme.layerOutlineWidth
+            color: Theme.outlineMedium
             visible: foldersCol.visible || devicesCol.visible
         }
 
@@ -111,42 +112,43 @@ DesktopPluginComponent {
             id: foldersCol
 
             width: parent.width
-            spacing: 1
+            spacing: Theme.spacingXS
             visible: root.cfg.desktopShowFolders && root.st.folders.length > 0
 
             // Only as many rows as actually fit, so the card never overflows its
             // user-chosen size. Problem folders sort first in Status.js, so a
             // truncated list still shows what is wrong.
-            readonly property int rowHeight: Theme.fontSizeSmall + 4
+            readonly property int rowHeight: Theme.fontSizeSmall + Theme.spacingXS * 2 + Theme.spacingXS
             readonly property int maxRows: {
-                const avail = root.height - (Theme.spacingM * 2) - statusIcon.height - Theme.spacingS * 2 - (devicesCol.visible ? foldersCol.rowHeight : 0);
+                const avail = root.height - (Theme.spacingM * 2) - headline.height - Theme.spacingS * 2 - (devicesCol.visible ? foldersCol.rowHeight : 0);
                 return Math.max(0, Math.floor(avail / rowHeight));
             }
 
             Repeater {
                 model: root.st.folders.slice(0, foldersCol.maxRows)
 
-                Row {
+                StatusCard {
                     required property var modelData
+
                     width: foldersCol.width
-                    height: foldersCol.rowHeight
-
-                    StyledText {
-                        text: modelData.label
-                        font.pixelSize: Theme.fontSizeSmall
-                        color: modelData.errorCount > 0 ? Theme.error : Theme.surfaceText
-                        width: parent.width * 0.6
-                        elide: Text.ElideRight
+                    compact: true
+                    iconName: modelData.paused ? "pause_circle" : (modelData.errorCount > 0 ? "folder_off" : "folder")
+                    accent: {
+                        if (modelData.errorCount > 0)
+                            return root.pal.danger;
+                        if (modelData.paused)
+                            return root.pal.muted;
+                        return modelData.needBytes > 0 ? root.pal.busy : root.pal.ok;
                     }
-
-                    StyledText {
-                        text: modelData.errorCount > 0 ? Status.plural(modelData.errorCount, qsTr("error")) : (modelData.paused ? qsTr("paused") : (modelData.needBytes > 0 ? Status.formatBytes(modelData.needBytes) : Math.floor(modelData.percent) + "%"))
-                        font.pixelSize: Theme.fontSizeSmall
-                        color: modelData.errorCount > 0 ? Theme.error : Theme.onSurfaceVariant
-                        width: parent.width * 0.4
-                        horizontalAlignment: Text.AlignRight
-                        elide: Text.ElideRight
+                    title: modelData.label
+                    trailingText: {
+                        if (modelData.errorCount > 0)
+                            return Status.plural(modelData.errorCount, qsTr("error"));
+                        if (modelData.paused)
+                            return qsTr("paused");
+                        return modelData.needBytes > 0 ? Status.formatBytes(modelData.needBytes) : Math.floor(modelData.percent) + "%";
                     }
+                    trailingColor: modelData.errorCount > 0 ? root.pal.text(root.pal.danger) : Theme.surfaceVariantText
                 }
             }
 
@@ -154,7 +156,7 @@ DesktopPluginComponent {
                 text: qsTr("+%1 more").arg(root.st.folders.length - foldersCol.maxRows)
                 visible: root.st.folders.length > foldersCol.maxRows && foldersCol.maxRows > 0
                 font.pixelSize: Theme.fontSizeSmall
-                color: Theme.onSurfaceVariant
+                color: Theme.surfaceVariantText
             }
         }
 
@@ -163,40 +165,22 @@ DesktopPluginComponent {
             id: devicesCol
 
             width: parent.width
-            spacing: 1
+            spacing: Theme.spacingXS
             visible: root.cfg.desktopShowDevices && root.st.devices.length > 0
 
             Repeater {
                 model: root.st.devices
 
-                Row {
+                StatusCard {
                     required property var modelData
+
                     width: devicesCol.width
-                    spacing: Theme.spacingXS
-
-                    DankIcon {
-                        name: modelData.connected ? "cloud_done" : "cloud_off"
-                        size: Theme.iconSizeSmall
-                        color: modelData.connected ? Theme.success : Theme.warning
-                        anchors.verticalCenter: parent.verticalCenter
-                    }
-
-                    StyledText {
-                        text: modelData.name
-                        font.pixelSize: Theme.fontSizeSmall
-                        color: Theme.onSurfaceVariant
-                        elide: Text.ElideRight
-                        width: parent.width - Theme.iconSizeSmall - Theme.spacingXS * 2 - lagText.width
-                        anchors.verticalCenter: parent.verticalCenter
-                    }
-
-                    StyledText {
-                        id: lagText
-                        text: modelData.connected ? (modelData.percent >= 0 && modelData.percent < 100 ? Math.floor(modelData.percent) + "%" : "") : (modelData.lastSeen ? Status.formatAge(modelData.lastSeen) : qsTr("never"))
-                        font.pixelSize: Theme.fontSizeSmall
-                        color: modelData.connected ? Theme.onSurfaceVariant : Theme.warning
-                        anchors.verticalCenter: parent.verticalCenter
-                    }
+                    compact: true
+                    iconName: modelData.connected ? "cloud_done" : "cloud_off"
+                    accent: modelData.connected ? root.pal.ok : root.pal.warn
+                    title: modelData.name
+                    trailingText: modelData.connected ? (modelData.percent >= 0 && modelData.percent < 100 ? Math.floor(modelData.percent) + "%" : "") : (modelData.lastSeen ? Status.formatAge(modelData.lastSeen) : qsTr("never"))
+                    trailingColor: modelData.connected ? Theme.surfaceVariantText : root.pal.text(root.pal.warn)
                 }
             }
         }

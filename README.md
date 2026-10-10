@@ -164,7 +164,13 @@ SyncthingDaemon.qml         daemon surface: wakes the lazy singleton, hosts IPC
         ├── SyncthingDesktopWidget.qml  wallpaper card
         └── SyncthingDetails.qml        the detail body, shared by popout and CC
                  │
+        StatusCard / MeterBar           presentational, data in through properties
+        SectionHeader / MessageCard     only — they never touch the singleton
+                 │
+        SyncthingPalette.qml            binds Theme to the colour logic below
+                 │
         Config.js / Status.js           pure, dependency-free, unit-tested
+        Palette.js                      ↑ likewise; see "Colour" below
 ```
 
 Two decisions worth knowing:
@@ -176,6 +182,23 @@ QML engine, and its properties are ordinary bindable properties, so one poll
 updates every surface. Measured on a two-monitor setup, the idle rate is a single
 summary poll every 10 s and one full poll every 20 s, regardless of how many
 places the widget appears.
+
+**Colour is derived, not referenced.** A DMS theme may leave `error`, `warning`
+and `success` undefined — all but one of the ten stock themes do — and `Theme`
+then falls back to Material defaults tuned for a dark neutral surface. Used
+directly those break twice: `error` is `#F2B8B5`, invisible as text on a light
+theme, and the `warning` fallback `#FF9800` is close enough to Amber's and
+Orange's primary that "disconnected" and "syncing" render as the same colour.
+`Palette.js` corrects both — `readableOn` guarantees contrast against the
+surface, `separate` pulls the warning tone off the primary — and the fixtures
+assert the result across all ten themes in both modes.
+
+The rule the surfaces follow: a severity colour lands on an icon, a meter or a
+border; label text stays `surfaceText`/`surfaceVariantText`. And nothing sets a
+background without also setting its foreground. That last one is not a style
+preference — `DankButton` defaults `textColor` to `Theme.buttonText`, which only
+pairs with `Theme.buttonBg`, so overriding the background alone paints `#000000`
+on `#2e2921` under stock Amber dark.
 
 **Two polling tiers.** The summary tier is 3 requests (connections, system
 errors, aggregate completion); the full tier adds the folder roster and one
@@ -200,7 +223,7 @@ would make updates instant; that needs a persistent `Process` with reconnect and
 `devenv.nix` provides the toolchain:
 
 ```bash
-st-test     # Config.js / Status.js fixtures (node, 81 checks)
+st-test     # Config.js / Status.js / Palette.js fixtures (node, 283 checks)
 st-poll     # run the poll script against the live instance
 st-fmt      # qmlformat -i
 st-lint     # qmllint + shellcheck
@@ -209,9 +232,15 @@ st-reload   # reload in the running shell
 st-logs     # journalctl --user -u dms -f
 ```
 
-`Status.js` and `Config.js` are deliberately free of QML imports so the fixtures
-can run under node; `tests/run.mjs` strips the leading `.pragma library` line and
-imports the rest as an ES module.
+`Status.js`, `Config.js` and `Palette.js` are deliberately free of QML imports so
+the fixtures can run under node; `tests/run.mjs` strips the leading
+`.pragma library` line and imports the rest as an ES module.
+
+The contrast fixtures go one step further and read DMS's own `StockThemes.js`,
+asserting every foreground the plugin emits against the background it is
+actually drawn on, for all ten stock themes in both light and dark. They are
+skipped with a message when the shell is not installed; `DMS_SHELL_DIR` forces a
+path, otherwise `st-dms-root` finds it.
 
 `qmllint` cannot resolve `qs.*` on its own, because DMS maps its shell root to a
 `qs` module namespace through Quickshell's loader rather than real qmldir files.
@@ -237,14 +266,29 @@ closed with `depends` entries without breaking module resolution outright.
 |---|---|
 | `*.qml`, `*.js` | `dms ipc call plugins reload dankSyncthing` |
 | `plugin.json` | `dms ipc call plugin-scan rescan dankSyncthing` — manifests are mtime-cached |
-| files added/removed | `dms ipc call plugin-scan scan` |
+| files added/removed | **full shell restart** |
 | `SyncthingService.qml` | **full shell restart** |
 
-The last one is the trap: QML registers a `pragma Singleton` once per engine, and
-a plugin reload neither re-registers nor re-instantiates it. After editing the
-singleton the old object is still live, and surfaces expecting a renamed or added
-property silently receive `undefined`. `scripts/reload.sh` detects this from
-`git status` and restarts the shell for you.
+Two traps, both needing a restart.
+
+QML registers a `pragma Singleton` once per engine, and a plugin reload neither
+re-registers nor re-instantiates it. After editing the singleton the old object
+is still live, and surfaces expecting a renamed or added property silently
+receive `undefined`.
+
+Adding a file is the one that costs you more than time. The loader busts its
+component cache with a `?t=<epoch>` query, but Qt caches the *directory listing*
+behind same-directory type resolution separately, and nothing invalidates it —
+so a file added since the engine started stays invisible no matter how often you
+`plugin-scan scan`. The surfaces referencing it fail with `<Type> is not a type`,
+and because DankBar drops a widget whose component will not build, **you also
+lose its bar placement**. On a home-manager setup where `settings.json` is a
+read-only store symlink, that placement was session-only to begin with and does
+not come back on its own: re-add it in *Settings → Appearance → DankBar Layout*,
+or declare it in home-manager.
+
+`scripts/reload.sh` picks the right mode from `git status`, so it restarts for
+you in both cases.
 
 ## License
 

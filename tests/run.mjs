@@ -24,6 +24,10 @@ const Status = await load("Status.js", [
 const Config = await load("Config.js", [
     "DEFAULTS", "resolve", "hasServer", "serverUrl", "serverHost", "pollArgs"
 ]);
+const Palette = await load("Palette.js", [
+    "luminance", "distance", "blend", "withAlpha", "readableOn", "separate", "on",
+    "statusColor", "MIN_DELTA"
+]);
 
 let passed = 0;
 const failures = [];
@@ -285,6 +289,140 @@ check("correct selfId excludes self",
 // QQuickItem already defines `state`; the service exposes `syncState` instead.
 // Nothing to assert in JS, but derive must return a plain object either way.
 ok("derive returns an object with a kind", typeof Status.derive(envelope()).kind === "string");
+
+// --- contrast across every stock theme --------------------------------------
+//
+// The bug this guards against: a colour token is only ever correct against the
+// background it was designed for. DankButton's textColor defaults to
+// Theme.buttonText, which pairs with Theme.buttonBg — override the background
+// alone and on stock Amber dark you get #000000 text on #2e2921.
+//
+// The 81 fixtures above could not have caught that, because contrast was never
+// expressed as data. These checks read DMS's own theme table and assert every
+// foreground the plugin emits against the background it is actually drawn on.
+
+import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
+
+function dmsRoot() {
+    if (process.env.DMS_SHELL_DIR && existsSync(process.env.DMS_SHELL_DIR))
+        return process.env.DMS_SHELL_DIR;
+    // st-dms-root is devenv.nix's single source of truth for this lookup.
+    try {
+        const out = execFileSync("st-dms-root", { encoding: "utf8" }).trim();
+        if (out && existsSync(out)) return out;
+    } catch {
+        // not in the dev shell, or DMS not installed
+    }
+    return null;
+}
+
+function hex(c) {
+    const h = c.replace("#", "");
+    const n = h.length === 3 ? h.split("").map(x => x + x).join("") : h;
+    return {
+        r: parseInt(n.slice(0, 2), 16) / 255,
+        g: parseInt(n.slice(2, 4), 16) / 255,
+        b: parseInt(n.slice(4, 6), 16) / 255,
+        a: 1
+    };
+}
+
+// Theme.qml:432-437 — the fallbacks applied when a theme omits these, which is
+// all but one of the stock themes. They are the reason the plugin needs
+// Palette.js at all.
+const FALLBACK = { error: "#F2B8B5", warning: "#FF9800", success: "#4CAF50" };
+
+function themeObject(raw) {
+    const t = {};
+    for (const k of ["primary", "primaryText", "surface", "surfaceText", "surfaceVariant",
+                     "surfaceVariantText", "surfaceContainer", "surfaceContainerHigh", "outline"])
+        t[k] = hex(raw[k]);
+    for (const k of ["error", "warning", "success"])
+        t[k] = hex(raw[k] || FALLBACK[k]);
+    // Theme.qml:617-641, default buttonColorMode branch.
+    t.buttonBg = t.primary;
+    t.buttonText = t.primaryText;
+    return t;
+}
+
+function delta(a, b) {
+    return Math.abs(Palette.luminance(a) - Palette.luminance(b));
+}
+
+const shellRoot = dmsRoot();
+if (!shellRoot) {
+    console.log("· contrast suite skipped: DMS shell not found (set DMS_SHELL_DIR to run it)");
+} else {
+    const stock = await (async () => {
+        const src = readFileSync(join(shellRoot, "Common", "StockThemes.js"), "utf8");
+        const mod = src + "\nexport { StockThemes };";
+        const url = "data:text/javascript;base64," + Buffer.from(mod).toString("base64");
+        return (await import(url)).StockThemes;
+    })();
+
+    // Every token Status.js can name, as it is used: the first four land on
+    // icons and meters, and all of them can reach text via pal.text().
+    const TOKENS = ["success", "primary", "warning", "error", "onSurfaceVariant"];
+
+    let themeCount = 0;
+    for (const mode of ["DARK", "LIGHT"]) {
+        for (const [name, raw] of Object.entries(stock[mode])) {
+            const t = themeObject(raw);
+            const bg = t.surfaceContainer;
+            const label = `${name} ${mode.toLowerCase()}`;
+            themeCount++;
+
+            // 1. Status text is readable on the panel it is drawn on.
+            for (const token of TOKENS) {
+                const fg = Palette.statusColor(token, t, bg, true);
+                ok(`${label}: ${token} as text reads on surfaceContainer`,
+                    delta(fg, bg) >= Palette.MIN_DELTA - 1e-9);
+            }
+
+            // 2. The neutral text tokens the cards use.
+            ok(`${label}: surfaceText reads on surfaceContainer`,
+                delta(t.surfaceText, bg) >= Palette.MIN_DELTA);
+            ok(`${label}: surfaceVariantText reads on surfaceContainer`,
+                delta(t.surfaceVariantText, bg) >= 0.20);
+
+            // 3. The warning accent stays distinguishable from primary, so
+            //    "disconnected" and "syncing" never render as the same colour.
+            //    Amber is the theme that fails this without separate().
+            const warn = Palette.statusColor("warning", t, bg, false);
+            ok(`${label}: warning accent is distinct from primary`,
+                Palette.distance(warn, t.primary) >= 0.20 - 1e-9);
+
+            // 4. DMS's own button pair, as a canary: if this ever stops being
+            //    self-consistent, leaving DankButton's defaults alone is no
+            //    longer the safe choice.
+            ok(`${label}: DMS buttonBg/buttonText are a readable pair`,
+                delta(t.buttonText, t.buttonBg) >= Palette.MIN_DELTA);
+
+            // 5. The regression itself. The armed Restart button tints the
+            //    surface 22% toward the danger tone; its label must read
+            //    against that composite, not against buttonBg.
+            const armedBg = Palette.blend(bg, t.error, 0.22);
+            const armedFg = Palette.readableOn(t.error, bg);
+            ok(`${label}: armed Restart label reads on its tinted background`,
+                delta(armedFg, armedBg) >= 0.20);
+
+            // 6. And the shape of the original bug: buttonText on a surface
+            //    background must be caught as unreadable somewhere. This
+            //    asserts the failure is real, so the suite cannot pass by
+            //    accident on a theme where the pairing happens to work.
+            if (name === "amber" && mode === "DARK") {
+                // #000000 on #2e2921 is a luminance delta of about 0.16,
+                // roughly 1.5:1. Asserting it fails the plugin's own bar keeps
+                // this suite honest: it cannot pass by accident on a theme
+                // where the bad pairing happens to be readable anyway.
+                ok("amber dark: the original pairing is genuinely unreadable",
+                    delta(t.buttonText, t.surfaceContainerHigh) < Palette.MIN_DELTA);
+            }
+        }
+    }
+    ok("contrast suite covered both modes of every stock theme", themeCount === 20);
+}
 
 // --- report -----------------------------------------------------------------
 if (failures.length) {

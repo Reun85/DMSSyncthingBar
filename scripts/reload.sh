@@ -5,7 +5,7 @@
 # cached by mtime, so the right command depends on what changed:
 #   *.qml / *.js            -> plugins reload
 #   plugin.json             -> plugin-scan rescan (a reload will not re-read it)
-#   files added/removed     -> plugin-scan scan
+#   files added/removed     -> full shell restart (see below)
 #   SyncthingService.qml    -> full shell restart (see below)
 #
 # The singleton is the exception. QML registers a `pragma Singleton` once per
@@ -13,6 +13,14 @@
 # after editing SyncthingService.qml the old object is still live — surfaces that
 # expect a renamed or added property then silently get `undefined`. Only
 # restarting the shell picks it up.
+#
+# Adding a QML file is the second restart case, and it is not obvious. The
+# loader busts its component cache with a `?t=<epoch>` query, but Qt caches the
+# *directory listing* that backs same-directory type resolution separately, and
+# nothing invalidates that. A file added since the engine started is therefore
+# invisible however many times you scan and reload: the surfaces that reference
+# it fail with "<Type> is not a type", and because the bar drops a widget whose
+# component fails to build, you also lose its placement.
 #
 # This script picks for you based on git status, and can be forced.
 set -euo pipefail
@@ -29,8 +37,9 @@ if [ "$MODE" = auto ]; then
         MODE=restart
     elif grep -q 'plugin.json' <<<"$changed"; then
         MODE=rescan
-    elif grep -qE '^\?\?|^ ?D' <<<"$changed"; then
-        MODE=scan
+    elif grep -qE '^\?\?|^ ?D|^A' <<<"$changed"; then
+        # Added or removed files: see the directory-listing note above.
+        MODE=restart
     else
         MODE=reload
     fi
@@ -44,7 +53,7 @@ case "$MODE" in
     scan)   dms ipc call plugin-scan scan; sleep 1
             dms ipc call plugins reload "$PLUGIN_ID" ;;
     restart)
-            echo "SyncthingService.qml changed: restarting the shell so the singleton is re-registered"
+            echo "restarting the shell: a new/removed file or an edited singleton needs a fresh QML engine"
             systemctl --user restart dms
             # Wait until the plugin actually appears in the registry. A bare
             # `plugins list` starts answering before PluginService has finished
