@@ -1,0 +1,21 @@
+{
+    "$schema": "https://github.com/AvengeMedia/DankMaterialShell/raw/refs/heads/master/PLUGINS/plugin-schema.json",
+    "id": "dankSyncthing",
+    "name": "Syncthing Status",
+    "description": "Syncthing sync state in the bar, Control Center and on the desktop, with the details needed to fix problems",
+    "version": "0.1.0",
+    "author": "Reun",
+    "type": "composite",
+    "capabilities": ["daemon", "dankbar-widget", "control-center", "desktop-widget", "monitoring"],
+    "icon": "cloud_sync",
+    "components": {
+        "daemon": "./SyncthingDaemon.qml",
+        "widget": "./SyncthingBarWidget.qml",
+        "desktop": "./SyncthingDesktopWidget.qml"
+    },
+    "settings": "./SyncthingSettings.qml",
+    "startupCheck": "./StartupCheck.qml",
+    "dependencies": ["curl", "jq"],
+    "requires_dms": ">=1.5.0",
+    "permissions": ["settings_read", "settings_write", "process", "network"]
+}
