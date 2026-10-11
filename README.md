@@ -56,26 +56,23 @@ journalctl --user -u dms -f  # QML console output lands here
 Then add the bar widget in *Settings → Appearance → DankBar Layout*, and place the
 desktop widget in *Settings → Desktop Widgets*.
 
-### home-manager
-
-The DMS module maps `plugins.<name>.src` to
-`xdg.configFile."DankMaterialShell/plugins/<name>".source`, so `src` must be the
-directory that *contains* `plugin.json`:
+### NixOS / home-manager (flake input)
 
 ```nix
-{
-  # flake inputs
-  inputs.dms-syncthing = {
-    url = "github:<you>/DMS";
-    flake = false;
-  };
+# flake.nix
+inputs.dms-syncthing = {
+  url = "github:<you>/DMSSyncthingBar";   # or "path:/home/reun/SYNC/projects/dankSyncthing"
+  inputs.nixpkgs.follows = "nixpkgs";
+};
+```
 
-  # programs.dank-material-shell.plugins
-  # (on the stable flake / nixpkgs module this is programs.dankMaterialShell
-  #  or programs.dms-shell — match whichever you already use)
-  dankSyncthing = {
+```nix
+# home-manager
+{ inputs, ... }: {
+  imports = [ inputs.dms-syncthing.homeManagerModules.default ];
+
+  programs.dank-material-shell.plugins.dankSyncthing = {
     enable = true;
-    src = "${inputs.dms-syncthing}/dankSyncthing";
 
     # Optional, and machine-specific. Omit the whole `settings` block and the
     # plugin runs local-only with no remote UI anywhere.
@@ -87,7 +84,15 @@ directory that *contains* `plugin.json`:
 }
 ```
 
-Requires `curl` and `jq` on `PATH`; the plugin's startup check blocks activation
+Like `dms-plugin-registry`, the module only registers the plugin: it fills in
+`src` and leaves `enable` defaulting to `false`. It works with whichever DMS
+module you import (`programs.dank-material-shell`, `programs.dankMaterialShell`
+or `programs.dms-shell`). Enabling the plugin also adds `curl` and `jq` to
+`home.packages`. The flake also exports `packages.<system>.default` (the plugin
+directory itself) if you would rather set `src` yourself. `nix flake check` runs
+the logic fixtures.
+
+The plugin needs `curl` and `jq` on `PATH`; its startup check blocks activation
 with an explanatory toast if either is missing.
 
 ## Settings
